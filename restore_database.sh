@@ -1,6 +1,19 @@
 #!/bin/bash 
 
-#./restore_database.sh CISSERP DOUG /db2/DATABASES
+###################################################################################################################################
+#
+# Script......: restore_database.sh
+# Readme......: Restore backup image creating redirect archive and changing tablespaces directory.
+#       	restore_database.sh <<SOURCE_DATABASE_ALIAS>> <<TARGET_DATABASE_ALIAS>> <<TARGET_DIRECTORY_TO>>
+#		./restore_database.sh CISSERP TESTE /db2/backup
+#
+# Author......: Douglas Jose Dambros << douglas.dambros@ciss.com.br / douglasjosedambros@gmail.com >> 
+# Create date.: 09/03/2022
+# Last change.: 22/03/2022
+# Version.....: 0.1 (Creating)
+#
+###################################################################################################################################
+
 
 ## Variables
 #SOURCE_DATABASE_ALIAS="$1"
@@ -22,14 +35,20 @@ reset=$(tput sgr0)
 #TARGET_DIRECTORY="/db2/DATABASES"
 
 ## Variables test with online backup
-SOURCE_DATABASE_ALIAS="JPGT"
-TARGET_DATABASE_ALIAS="DOUG"
-TARGET_DIRECTORY="/db2/DATABASES"
+#SOURCE_DATABASE_ALIAS="JPGT"
+#TARGET_DATABASE_ALIAS="DOUG"
+#TARGET_DIRECTORY="/db2/DATABASES"
+
+## Variables teste with TESTE database
+SOURCE_DATABASE_ALIAS="CISSERP"
+TARGET_DATABASE_ALIAS="TESTE"
+TARGET_DIRECTORY="/db2/backup"
 
 ## Functions
-function showUsage()
+showUsage()
 {
-	echo "Invalid parameter."
+	echo ""
+	echo -e "${error}Invalid parameter.${reset}"
 	echo ""
 	echo "Usage: ./restore_database.sh SOURCE_DATABASE_ALIAS TARGET_DATABASE_ALIAS TARGET_DIRECTORY_TO"
 	echo ""
@@ -39,11 +58,12 @@ function showUsage()
 	echo ""
 	echo ""
 	echo "Exiting now!!!"
+	echo ""
 	return
 }
 
 
-function getMemory()
+getMemory()
 {
 	local MEMORY_TOTAL=`free -m | grep "Mem:" | awk {'print $2'}`
 	local MEMORY_FREE=`free -m | grep "Mem:" | awk {'print $4'}`
@@ -69,7 +89,7 @@ getDB2Version()
 
 getInstance()
 {
-	local INSTANCE_NAME=`db2level | grep "DB2 code release" | awk {'print $1'} | sed s/\)//g | sed s/\"//g`
+	INSTANCE_NAME=`db2level | grep "DB2 code release" | awk {'print $1'} | sed s/\)//g | sed s/\"//g`
 	local INSTANCE_MEMORY=`db2 get dbm cfg | grep "INSTANCE_MEMORY" | cut -d"=" -f 2 | sed s/\ //g`
         echo 	" | [Instance]"
         echo 	" |"
@@ -78,12 +98,41 @@ getInstance()
         echo 	""	
 }
 
+getDatabases()
+{
+	# Get instance databases
+	declare DATABASES=(`db2 list db directory | grep alias | awk {'print $4'}`)
+	TARGET_DATABASE_ALIAS_UPPER=`echo ${TARGET_DATABASE_ALIAS} | tr a-z A-Z`
+
+	echo	" | [Instance databases]"
+	echo	" |"
+	echo -e " | Databases: \t\t\t${DATABASES[*]}"
+
+	# Target database alias already exists
+	for d in "${DATABASES[@]}"
+	do	
+		if [ $d == ${TARGET_DATABASE_ALIAS_UPPER} ];
+		then
+			echo -e "\n${error}Target database alias \"${TARGET_DATABASE_ALIAS_UPPER}\" already exists in instance ${INSTANCE_NAME} \n\nAbort\n${reset}"
+			
+			exit 1
+		fi
+	done
+}
+
 
 # Valid empty parameters
 if [ "${SOURCE_DATABASE_ALIAS}" == "" ] || [ "${TARGET_DATABASE_ALIAS}" == "" ] || [ "${TARGET_DIRECTORY}" == "" ]
 then
         showUsage
         exit 1
+fi
+
+# Invalid target database alias length
+if  [ ${#TARGET_DATABASE_ALIAS} -ge 9 ]
+then
+	echo -e "${error}Database alias length more than eight\n\nAbort\n${reset}"
+	exit 1
 fi
 
 # Start
@@ -100,11 +149,11 @@ echo ""
 echo "${bold}Step - Checking enviroment${reset}"
 echo ""
 
-# Getn and print info
+# Get, check and print info
 getMemory
 getDB2Version
 getInstance
-
+getDatabases
 
 
 echo ""
@@ -141,6 +190,45 @@ echo ""
 echo "${bold}Step - Creating directories${reset}"
 echo ""
 
+# Check if database directory already exists
+if [ -d "${TARGET_DIRECTORY}/${TARGET_DATABASE_ALIAS}" ]
+then
+
+	echo -e "Directory ${TARGET_DIRECTORY}/${TARGET_DATABASE_ALIAS} already exists.\n"
+
+		while true; do
+		    read -p "Do you wish to continue? (yes/no):" yn
+		    case $yn in
+		        [Yy]* ) break;;
+		        [Nn]* ) exit;;
+		        * ) echo "Please answer yes or no.";;
+		    esac
+		done
+fi
+
+echo ""
+
+# Check if log extract directory already exists and is empty
+if [ -n "$(ls -A ${TARGET_DIRECTORY}/${TARGET_DATABASE_ALIAS}/LOGS/LOG_EXTRACT/)" ]
+then
+
+	echo -e "There are some files in ${TARGET_DIRECTORY}/${TARGET_DATABASE_ALIAS}/LOGS/LOG_EXTRACT/\n"
+	
+		while true; do
+	            read -p "Do you wish remove and continue? (yes/no):" yn
+	            case $yn in
+	                [Yy]* ) break;;
+	                [Nn]* ) exit;;
+	                * ) echo "Please answer yes or no.";;
+	            esac
+	        done
+	
+	echo ""
+	echo -e "--> rm -r ${TARGET_DIRECTORY}/${TARGET_DATABASE_ALIAS}/LOGS/LOG_EXTRACT/*"
+	rm -r ${TARGET_DIRECTORY}/${TARGET_DATABASE_ALIAS}/LOGS/LOG_EXTRACT/*
+
+fi
+
 echo -e "--> mkdir -p ${TARGET_DIRECTORY}/${TARGET_DATABASE_ALIAS}/LOGS/LOG_ROTATE"
 mkdir -p ${TARGET_DIRECTORY}/${TARGET_DATABASE_ALIAS}/LOGS/LOG_ROTATE
 echo -e "--> mkdir -p ${TARGET_DIRECTORY}/${TARGET_DATABASE_ALIAS}/LOGS/LOG_ARCHIVE"
@@ -155,14 +243,13 @@ echo ""
 echo -e "${bold}Step - Restoring database ${SOURCE_DATABASE_ALIAS} as ${TARGET_DATABASE_ALIAS}${reset}"
 echo ""
 
-if [ "${BACKUP_MODE}" == "(Offline)" ]
+if [ "${BACKUP_MODE}" == "Offline" ]
 then
-        echo -e "--> RESTORE DB ${SOURCE_DATABASE_ALIAS} DBPATH ON ${TARGET_DIRECTORY} INTO ${TARGET_DATABASE_ALIAS} REDIRECT GENERATE SCRIPT REDIRECT.CLT"
-	db2 "RESTORE DB ${SOURCE_DATABASE_ALIAS} DBPATH ON ${TARGET_DIRECTORY} INTO ${TARGET_DATABASE_ALIAS} REDIRECT GENERATE SCRIPT REDIRECT.CLT"
+        echo -e "--> db2 \"RESTORE DB ${SOURCE_DATABASE_ALIAS} DBPATH ON ${TARGET_DIRECTORY}/${TARGET_DATABASE_ALIAS} INTO ${TARGET_DATABASE_ALIAS} REDIRECT GENERATE SCRIPT REDIRECT.CLT\""
+	db2 "RESTORE DB ${SOURCE_DATABASE_ALIAS} DBPATH ON ${TARGET_DIRECTORY}/${TARGET_DATABASE_ALIAS} INTO ${TARGET_DATABASE_ALIAS} REDIRECT GENERATE SCRIPT REDIRECT.CLT"
 else
-        echo -e "${error}Backup online, rotina ainda nao foi criada\n\nSaindo...\n${reset}"
-	echo ""
-	exit 0
+	echo -e "--> db2 \"RESTORE DB ${SOURCE_DATABASE_ALIAS} DBPATH ON ${TARGET_DIRECTORY}/${TARGET_DATABASE_ALIAS} INTO ${TARGET_DATABASE_ALIAS} LOGTARGET ${TARGET_DIRECTORY}/${TARGET_DATABASE_ALIAS}/LOGS/LOG_EXTRACT REDIRECT GENERATE SCRIPT REDIRECT.CLT\""
+	db2 "RESTORE DB ${SOURCE_DATABASE_ALIAS} DBPATH ON ${TARGET_DIRECTORY}/${TARGET_DATABASE_ALIAS} INTO ${TARGET_DATABASE_ALIAS} LOGTARGET ${TARGET_DIRECTORY}/${TARGET_DATABASE_ALIAS}/LOGS/LOG_EXTRACT REDIRECT GENERATE SCRIPT REDIRECT.CLT"
 fi
 
 
@@ -177,7 +264,7 @@ echo -e "--> cat REDIRECT.CLT | grep -oP '(?<=NEWLOGPATH ).*(?=${SOURCE_DATABASE
 CMD="cat REDIRECT.CLT | grep -o -P '(?<=NEWLOGPATH ).*(?=${SOURCE_DATABASE_ALIAS})' | sed s/\'//g"
 NEWLOGPATH_DIRECTORY=$(eval "$CMD")
 
-echo -e "--> grep -n "NEWLOGPATH" REDIRECT.CLT | cut -d : -f1"
+echo -e "--> grep -n \"NEWLOGPATH\" REDIRECT.CLT | cut -d : -f1"
 NEWLOGPATH_LINE=`grep -n "NEWLOGPATH" REDIRECT.CLT | cut -d : -f1`
 
 
@@ -187,8 +274,8 @@ echo -e "--> sed -i \"${NEWLOGPATH_LINE}d\" REDIRECT.CLT"
 sed -i "${NEWLOGPATH_LINE}d" REDIRECT.CLT
 
 # Add new NEWLOGPATH line
-echo -e "--> sed -i \"${NEWLOGPATH_LINE}i NEWLOGPATH '${TARGET_DIRECTORY}/${TARGET_DATABASE_ALIAS}/LOGS/LOG_ROTATE'\" REDIRECT.CLT"
-sed -i "${NEWLOGPATH_LINE}i NEWLOGPATH '${TARGET_DIRECTORY}/${TARGET_DATABASE_ALIAS}/LOGS/LOG_ROTATE'" REDIRECT.CLT
+echo -e "--> sed -i \"${NEWLOGPATH_LINE}i NEWLOGPATH '${TARGET_DIRECTORY}/${TARGET_DATABASE_ALIAS}/LOGS/LOG_ROTATE/'\" REDIRECT.CLT"
+sed -i "${NEWLOGPATH_LINE}i NEWLOGPATH '${TARGET_DIRECTORY}/${TARGET_DATABASE_ALIAS}/LOGS/LOG_ROTATE/'" REDIRECT.CLT
 
 # Replace / for \/
 NEWLOGPATH_DIRECTORY_AUX="${NEWLOGPATH_DIRECTORY////\/}"
@@ -216,12 +303,13 @@ db2 "update db cfg for ${TARGET_DATABASE_ALIAS} using logarchmeth1 disk:${TARGET
 echo ""
 
 # Rollforward
-if [ "${BACKUP_MODE}" == "(Offline)" ]
+if [ "${BACKUP_MODE}" == "Offline" ]
 then
-	echo -e "--> db2 rollforward db ${TARGET_DATABASE_ALIAS} stop"
-	db2 rollforward db ${TARGET_DATABASE_ALIAS} stop
+	echo -e "--> db2 \"ROLLFORWARD DB ${TARGET_DATABASE_ALIAS} STOP\""
+	db2 "ROLLFORWARD DB ${TARGET_DATABASE_ALIAS} STOP"
 else
-        echo "Backup online, rotina ainda nao foi criada"
+	echo -e "--> db2 \"ROLLFORWARD DB ${TARGET_DATABASE_ALIAS} TO END OF LOGS AND COMPLETE OVERFLOW LOG PATH(${TARGET_DIRECTORY}/${TARGET_DATABASE_ALIAS}/LOGS/LOG_EXTRACT)\""
+        db2 "ROLLFORWARD DB ${TARGET_DATABASE_ALIAS} TO END OF LOGS AND COMPLETE OVERFLOW LOG PATH(${TARGET_DIRECTORY}/${TARGET_DATABASE_ALIAS}/LOGS/LOG_EXTRACT)"
 fi
 
 echo ""
@@ -232,6 +320,7 @@ echo -e "--> db2 connect to ${TARGET_DATABASE_ALIAS}"
 db2 connect to ${TARGET_DATABASE_ALIAS}
 echo ""
 
+
 exit 0
 
 
@@ -240,16 +329,13 @@ exit 0
 #
 #	..:: Improvements to do ::..
 #
-# - [Step 0 - Checking backup] When capture backup image full name, check if exists only one image backup witch that name
-# - [Step 0 - Checking backup] Error while analyse image backup
-# - [Step 0 - Checking backup] Incompatible instance and database version							V
-# - [Step 0 - Checking backup] Get tablespace names from db2ckbkp analysis
-# - [Step 0 - Checking backup] Get database size from db2ckbkp analysis
-# - Check if the new directory is empty
+# - [Step - Checking backup] When capture backup image full name, check if exists only one image backup witch that name
+# - [Step - Checking backup] Error while analyse image backup
+# - [Step - Checking backup] Get tablespace names from db2ckbkp analysis
+# - [Step - Checking backup] Get database size from db2ckbkp analysis
 # - Check memory and disk available
-# - Check the new alias length
-# - Check if the new alias already exists in the instance
 # - Error handling
 # - Execute updv if necessary
+# - Alter session "Get NEWLOGPATH" because in different databases it wont work fine
 #
 #################################################################################################################################
